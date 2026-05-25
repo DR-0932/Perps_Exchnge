@@ -3,7 +3,6 @@ import { seed_orderbook } from './src/orderbook/seed'
 import { match_orders } from './src/matching/matching-engine'
 import { orderbooks } from './src/orderbook/orderbook'
 import { connect_mark_price_feed } from './src/mark-price/markprice'
-import { start_liquidation_engine } from './src/liquidation/liquidation-engine'
 import { add_position, remove_position } from './src/positions/positions-store'
 
 const ORDERS_STREAM    = "orders"
@@ -63,7 +62,7 @@ async function processOrderMessage(id: string, fields: Record<string, string>) {
 }
 
 function processPositionMessage(fields: Record<string, string>) {
-  const { action, positionId, userId, market, type, liquidationPrice, margin } = fields
+  const { action, positionId, userId, market, type, liquidationPrice, margin, averagePrice, qty } = fields
 
   if (action === "OPEN") {
     add_position({
@@ -72,7 +71,9 @@ function processPositionMessage(fields: Record<string, string>) {
       market:           market!,
       type:             type!,
       liquidationPrice: Number(liquidationPrice),
-      margin:           Number(margin)
+      margin:           Number(margin),
+      averagePrice:     Number(averagePrice),
+      qty:              Number(qty)
     })
   } else if (action === "CLOSE") {
     remove_position(Number(positionId))
@@ -119,7 +120,6 @@ async function start() {
   await ensureConsumerGroup(ORDERS_STREAM, ORDERS_GROUP)
   await ensureConsumerGroup(POSITIONS_STREAM, POSITIONS_GROUP)
   connect_mark_price_feed()
-  start_liquidation_engine()
 
   console.log(`Engine ready`)
 

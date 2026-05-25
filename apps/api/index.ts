@@ -92,6 +92,8 @@ async function processFill(raw:Record<string,string>):Promise<void>{
       data:{
         market:             f.market,
         type:               "LONG",
+        qty:                f.fill_qty,
+        leverage:           f.bid_leverage,
         margin:             f.filled_bid_margin,
         averagePrice:       f.fill_price,
         liquidationPrice:   bid_liq_price,
@@ -103,6 +105,8 @@ async function processFill(raw:Record<string,string>):Promise<void>{
       data:{
         market:             f.market,
         type:               "SHORT",
+        qty:                f.fill_qty,
+        leverage:           f.ask_leverage,
         margin:             f.filled_ask_margin,
         averagePrice:       f.fill_price,
         liquidationPrice:   ask_liq_price,
@@ -114,6 +118,7 @@ async function processFill(raw:Record<string,string>):Promise<void>{
       where:{orderId: f.bid_orderId},
       data:{status:"FILLED"},
     })]:[]),
+
     ...(f.ask_fully_filled ? [prisma.orders.update({
       where:{orderId:f.ask_orderId},
       data:{status:"FILLED"},
@@ -129,8 +134,11 @@ async function processFill(raw:Record<string,string>):Promise<void>{
       "market",           bidPosition.market,
       "type",             bidPosition.type,
       "liquidationPrice", String(bidPosition.liquidationPrice),
-      "margin",           String(bidPosition.margin)
+      "margin",           String(bidPosition.margin),
+      "averagePrice",     String(bidPosition.averagePrice),
+      "qty",              String(bidPosition.qty)
     ),
+
     (redis as any).xadd(
       "positions", "*",
       "action",           "OPEN",
@@ -139,7 +147,9 @@ async function processFill(raw:Record<string,string>):Promise<void>{
       "market",           askPosition.market,
       "type",             askPosition.type,
       "liquidationPrice", String(askPosition.liquidationPrice),
-      "margin",           String(askPosition.margin)
+      "margin",           String(askPosition.margin),
+      "averagePrice",     String(askPosition.averagePrice),
+      "qty",              String(askPosition.qty)
     ),
   ])
 }
@@ -164,7 +174,7 @@ async function start_fills_consumer(){
     const result = await (redis as any).call(
       "XREADGROUP","GROUP",FILLS_GROUP,FILLS_CONSUMER,
       "COUNT","10","BLOCK","0","STREAMS",FILLS_STREAM,">"
-    ) as [[string,[string,string[][]]]] | null
+    ) as [[string,[string,string[]][]]] | null
     
     if(!result) continue
 

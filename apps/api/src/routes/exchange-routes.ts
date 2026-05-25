@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { authMiddleware } from "../middlewares/auth";
-import { Order, onRamp, cancelOrder, equityAvl, openPosition, closedPosition, getOrder, openOrder, closedOrder, getFills } from "../controllers/exchange-controllers";
+import { Order, onRamp, cancelOrder, equityAvl, openPosition, closedPosition, getOrder, openOrder, closedOrder, getFills, closePosition } from "../controllers/exchange-controllers";
 
 export const exchangeRouter = Router();
 
@@ -12,6 +12,7 @@ exchangeRouter.get('/equity/available', authMiddleware, equityAvl)
 
 exchangeRouter.get('/positions/open/:marketId', authMiddleware, openPosition)
 exchangeRouter.get('/positions/closed/:marketId', authMiddleware, closedPosition)
+exchangeRouter.delete('/position/:positionId', authMiddleware, closePosition)
 
 exchangeRouter.get('/orders/open/:marketId', authMiddleware, openOrder)
 exchangeRouter.get('/orders/closed/:marketId', authMiddleware, closedOrder)

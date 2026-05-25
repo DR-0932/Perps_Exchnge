@@ -2,7 +2,7 @@ import type { Request, Response } from 'express'
 import { onrampSchema, orderSchema } from '../types/exchange-schema'
 import { prisma, redis } from '../db'
 
-// onRamp
+/**user deposits money,find cltrl record in DB and update avl or create new */
 export async function onRamp(req: Request, res: Response): Promise<void> {
   const userId = req.userId
   const parsedBody = onrampSchema.safeParse(req.body)
@@ -29,7 +29,7 @@ export async function onRamp(req: Request, res: Response): Promise<void> {
   }
 }
 
-/** ----creating orders---- */
+/** creating orders/margin_required check,update margin to avl/locked,limit orders pushed to redis */
 const MAX_LEVERAGE = 100
 export async function Order(req: Request, res: Response): Promise<void> {
   const parsedBody = orderSchema.safeParse(req.body)
@@ -96,7 +96,7 @@ export async function Order(req: Request, res: Response): Promise<void> {
       : price * (1 + 1 / leverage)
 
     const position = await prisma.position.create({
-      data: { market, type, margin: margin_required, averagePrice: price,
+      data: { market, type, qty, leverage, margin: margin_required, averagePrice: price,
         liquidationPrice: Math.round(liquidationPrice),
         pnl: 0, userId
       }
@@ -110,14 +110,16 @@ export async function Order(req: Request, res: Response): Promise<void> {
       "market",           position.market,
       "type",             position.type,
       "liquidationPrice", String(position.liquidationPrice),
-      "margin",           String(position.margin)
+      "margin",           String(position.margin),
+      "averagePrice",     String(position.averagePrice),
+      "qty",              String(position.qty)
     )
   }
 
   res.status(201).json({ order })
 }
 
-// cancel order
+/**set status to cancelled,unlock margin,remove from redis sorted set */
 export async function cancelOrder(req: Request, res: Response): Promise<void> {
   const userId = req.userId
 
@@ -167,7 +169,7 @@ export async function cancelOrder(req: Request, res: Response): Promise<void> {
   res.status(200).json({ order: cancelled })
 }
 
-// equity available
+/**return avl,lckd,total,cltrl table readonly */
 export async function equityAvl(req: Request, res: Response): Promise<void> {
   const userId = req.userId
 
@@ -191,6 +193,7 @@ async function getPositions(userId: number | undefined, marketId: string, status
   })
 }
 
+/** Need to review once more */
 export async function openPosition(req: Request, res: Response): Promise<void> {
   const userId = req.userId
   const marketId = req.params.marketId as string
@@ -205,6 +208,7 @@ export async function openPosition(req: Request, res: Response): Promise<void> {
   res.status(200).json({ positions })
 }
 
+
 export async function closedPosition(req: Request, res: Response): Promise<void> {
   const userId = req.userId
   const marketId = req.params.marketId as string
@@ -218,6 +222,53 @@ export async function closedPosition(req: Request, res: Response): Promise<void>
 
   res.status(200).json({ positions })
 }
+
+export async function closePosition(req:Request,res:Response):Promise<void>{
+  const userId =req.userId;
+  const positionId= Number(req.params.positionId)
+
+  const position = await prisma.position.findFirst({
+    where:{id:positionId,userId}
+  })
+
+  if(!position){
+    res.status(404).json({error:"position not found"})
+    return
+  }
+  if(position.status !== "OPEN"){
+    res.status(400).json({error:"postion is not open"})
+    return
+  }
+
+  const raw_mark = await (redis as any).hget("mark_prices", position.market)
+  const mark_price = raw_mark ? Number(raw_mark) : position.averagePrice
+  const pnl = position.type === "LONG"
+    ? (mark_price - position.averagePrice) * position.qty
+    : (position.averagePrice - mark_price) * position.qty
+  const collateral_return = Math.max(0, position.margin + pnl)
+
+  await prisma.$transaction([
+    prisma.position.update({
+      where:{id:positionId},
+      data:{status:"CLOSED", pnl}
+    }),
+    prisma.collateral.updateMany({
+      where:{userId},
+      data:{
+        available:{increment:collateral_return},
+        locked:{decrement:position.margin}
+      }
+    })
+  ])
+
+  await (redis as any).xadd(
+    "positions","*",
+    "action","CLOSE",
+    "positionId",String(positionId)
+  )
+  res.status(200).json({message:"position closed", pnl})
+}
+
 
 // orders helper
 async function getOrders(userId: number | undefined, marketId: string, status?: string) {

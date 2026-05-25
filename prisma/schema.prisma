@@ -39,6 +39,8 @@ model Position{
   id                Int      @id @default(autoincrement())
   market            String
   type              String
+  qty               Int
+  leverage          Int
   margin            Int
   liquidationPrice  Int
   pnl               Int

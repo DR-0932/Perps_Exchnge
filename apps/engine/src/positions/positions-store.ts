@@ -5,6 +5,8 @@ export interface PositionEntry {
   type:             string
   liquidationPrice: number
   margin:           number
+  averagePrice:     number
+  qty:              number
 }
 
 export const positions_store = new Map<number, PositionEntry>()
@@ -20,3 +22,4 @@ export function remove_position(positionId: number): void {
 export function get_all_positions(): PositionEntry[] {
   return [...positions_store.values()]
 }
+  

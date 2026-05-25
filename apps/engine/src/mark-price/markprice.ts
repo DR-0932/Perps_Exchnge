@@ -1,4 +1,7 @@
 import { orderbooks } from "../orderbook/orderbook"
+import { check_liquidations } from "../liquidation/liquidation-engine"
+import { update_pnl } from "../pnl/pnl-updated"
+import { redis } from "../db"
 
 export const mark_prices = new Map<string,number>()
 
@@ -27,7 +30,13 @@ export function connect_mark_price_feed():void{
         const data =msg.data
         if(data?.e ==="markPriceUpdate"){
             const market =to_market(data.s)
-            if(market) mark_prices.set(market, Math.round(parseFloat(data.p) * 100))
+            if(market) {
+            const price = Math.round(parseFloat(data.p) * 100)
+            mark_prices.set(market, price)
+            ;(redis as any).hset("mark_prices", market, String(price))
+            check_liquidations(market, price)
+            update_pnl(market, price)
+        }
         }
     }
     ws.onclose=() =>{
