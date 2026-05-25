@@ -1,0 +1,6 @@
+{
+  "name": "@perps/types",
+  "type": "module",
+  "private": true,
+  "main": "src/index.ts"
+}

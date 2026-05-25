@@ -1,0 +1,90 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../packages/db/src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User{
+  userId      Int     @id  @default(autoincrement())
+  username  String  @unique
+  password  String 
+
+  collateral Collateral[]
+  positions  Position[]
+  order      Orders[]
+  fills     Fills[]
+
+
+
+}
+
+model Collateral{
+  collateralId    Int   @id @default(autoincrement())
+  available    Int
+  locked       Int
+
+  userId      Int         @unique
+  user     User  @relation(fields: [userId],references: [userId])
+}
+
+model Position{
+  id                Int      @id @default(autoincrement())
+  market            String
+  type              String
+  margin            Int
+  liquidationPrice  Int
+  pnl               Int
+  averagePrice      Int
+  status            String      @default("OPEN")
+
+  userId            Int
+  user      User @relation(fields: [userId],references: [userId])
+}
+
+model Orders{
+  orderId     Int      @id @default(autoincrement())
+  market      String
+  type        String
+  leverage    Int
+  qty         Int
+  orderType   String
+  price       Int
+  status      String
+  createdAt   DateTime @default(now())
+    
+
+  userId      Int
+  user        User    @relation(fields: [userId],references: [userId])
+
+  fills   Fills[]
+  
+}
+
+model Fills{
+  fillsId     Int   @id @default(autoincrement())
+  price       Int
+  qty         Int
+  market      String
+  maker_order_id   Int
+  taker_order_id    Int
+  market_id   String
+  createdAt   DateTime    @default(now())
+    /* add a different maker and taker everywhere + alright to use uuid*/
+  // taker_order  Orders    @relation(fields: [taker_order_id],references: [orderId])
+  // maker_order  Orders    @relation(fields: [maker_order_id],references: [orderId])
+//maker_user
+//taker_user
+  orderId     Int
+  order     Orders    @relation(fields: [orderId],references: [orderId])
+
+  userId    Int
+  user      User    @relation(fields: [userId],references: [userId])
+}
