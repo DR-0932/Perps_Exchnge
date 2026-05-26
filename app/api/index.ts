@@ -9,6 +9,7 @@ const FILLS_GROUP = "api-group"
 const FILLS_CONSUMER = "consumer-1"
 
 app.use(express.json());
+app.set('json replacer', (_: string, v: any) => typeof v === 'bigint' ? Number(v) : v)
 
 app.use("/auth", authrouter);
 app.use("/exchange", exchangeRouter);
@@ -64,64 +65,62 @@ async function processFill(raw:Record<string,string>):Promise<void>{
   const ask_liq_price = Math.round(f.fill_price * (1 + 1 / f.ask_leverage))
 
   const [,,bidPosition, askPosition] = await prisma.$transaction([
-    prisma.fills.create({
+    prisma.fill.create({
       data:{
-        price:            f.fill_price,
-        qty:              f.fill_qty,
+        price:        BigInt(f.fill_price),
+        qty:          BigInt(f.fill_qty),
+        market:       f.market,
+        marketId:     f.market,
+        makerOrderId: f.bid_orderId,
+        takerOrderId: f.ask_orderId,
+        userId:       f.bid_userId
+      }
+    }),
+    prisma.fill.create({
+      data:{
+        price:        BigInt(f.fill_price),
+        qty:          BigInt(f.fill_qty),
+        market:       f.market,
+        marketId:     f.market,
+        makerOrderId: f.bid_orderId,
+        takerOrderId: f.ask_orderId,
+        userId:       f.ask_userId
+      }
+    }),
+    prisma.position.create({
+      data:{
         market:           f.market,
-        market_id:        f.market,
-        maker_order_id:   f.bid_orderId,
-        taker_order_id:   f.ask_orderId,
-        orderId:          f.bid_orderId,
+        type:             "LONG",
+        qty:              BigInt(f.fill_qty),
+        leverage:         f.bid_leverage,
+        margin:           BigInt(f.filled_bid_margin),
+        averagePrice:     BigInt(f.fill_price),
+        liquidationPrice: BigInt(bid_liq_price),
+        pnl:              BigInt(0),
         userId:           f.bid_userId
       }
     }),
-    prisma.fills.create({
+    prisma.position.create({
       data:{
-        price:            f.fill_price,
-        qty:              f.fill_qty,
         market:           f.market,
-        market_id:        f.market,
-        maker_order_id:   f.bid_orderId,
-        taker_order_id:   f.ask_orderId,
-        orderId:          f.ask_orderId,
+        type:             "SHORT",
+        qty:              BigInt(f.fill_qty),
+        leverage:         f.ask_leverage,
+        margin:           BigInt(f.filled_ask_margin),
+        averagePrice:     BigInt(f.fill_price),
+        liquidationPrice: BigInt(ask_liq_price),
+        pnl:              BigInt(0),
         userId:           f.ask_userId
       }
     }),
-    prisma.position.create({
-      data:{
-        market:             f.market,
-        type:               "LONG",
-        qty:                f.fill_qty,
-        leverage:           f.bid_leverage,
-        margin:             f.filled_bid_margin,
-        averagePrice:       f.fill_price,
-        liquidationPrice:   bid_liq_price,
-        pnl:                0,
-        userId:             f.bid_userId
-      }
-    }),
-    prisma.position.create({
-      data:{
-        market:             f.market,
-        type:               "SHORT",
-        qty:                f.fill_qty,
-        leverage:           f.ask_leverage,
-        margin:             f.filled_ask_margin,
-        averagePrice:       f.fill_price,
-        liquidationPrice:   ask_liq_price,
-        pnl:                0,
-        userId:             f.ask_userId
-      }
-    }),
-    ...(f.bid_fully_filled ? [prisma.orders.update({
-      where:{orderId: f.bid_orderId},
-      data:{status:"FILLED"},
+    ...(f.bid_fully_filled ? [prisma.order.update({
+      where:{ id: f.bid_orderId },
+      data: { status: "FILLED" },
     })]:[]),
 
-    ...(f.ask_fully_filled ? [prisma.orders.update({
-      where:{orderId:f.ask_orderId},
-      data:{status:"FILLED"},
+    ...(f.ask_fully_filled ? [prisma.order.update({
+      where:{ id: f.ask_orderId },
+      data: { status: "FILLED" },
     })]:[]),
   ])
 
@@ -231,7 +230,7 @@ async function start_liquidations_consumer(){
           }),
           prisma.collateral.updateMany({
             where: { userId },
-            data:  { locked: { decrement: margin } }
+            data:  { locked: { decrement: BigInt(margin) } }
           })
         ])
 

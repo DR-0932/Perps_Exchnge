@@ -38,8 +38,8 @@ export async function signup(req:Request,res:Response):Promise<void> {
 
     });
     res.status(201).json({
-      token: createToken({userId: user.userId}),
-      userId: user.userId,
+      token: createToken({userId: user.id}),
+      userId: user.id,
       username: user.username,
     })
   }catch{
@@ -72,8 +72,8 @@ export async function signin(req:Request,res:Response):Promise<void>{
     }
 
     res.json({
-      token:createToken({userId:user.userId}),
-      userId:user.userId,
+      token:createToken({userId:user.id}),
+      userId:user.id,
       username:user.username
     })
 

@@ -5,9 +5,6 @@ export interface Tokenpayload{
   userId:number;
 }
 
-
-
-
 export function authMiddleware(req:Request,res:Response,next:NextFunction):void{
 
   const authHeader = req.headers.authorization;

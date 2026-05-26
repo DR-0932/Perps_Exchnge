@@ -2,7 +2,6 @@ import type { Request, Response } from 'express'
 import { onrampSchema, orderSchema } from '../types/exchange-schema'
 import { prisma, redis } from '../db'
 
-/**user deposits money,find cltrl record in DB and update avl or create new */
 export async function onRamp(req: Request, res: Response): Promise<void> {
   const userId = req.userId
   const parsedBody = onrampSchema.safeParse(req.body)
@@ -17,19 +16,18 @@ export async function onRamp(req: Request, res: Response): Promise<void> {
 
   if (cltrlExists) {
     const updated = await prisma.collateral.update({
-      where: { collateralId: cltrlExists.collateralId },
-      data: { available: { increment: amount } }
+      where: { id: cltrlExists.id },
+      data: { available: { increment: BigInt(amount) } }
     })
-    res.status(200).json({ available: updated.available, locked: updated.locked })
+    res.status(200).json({ available: Number(updated.available), locked: Number(updated.locked) })
   } else {
     const created = await prisma.collateral.create({
-      data: { available: amount, locked: 0, userId }
+      data: { available: BigInt(amount), locked: BigInt(0), userId }
     })
-    res.status(201).json({ available: created.available, locked: created.locked })
+    res.status(201).json({ available: Number(created.available), locked: Number(created.locked) })
   }
 }
 
-/** creating orders/margin_required check,update margin to avl/locked,limit orders pushed to redis */
 const MAX_LEVERAGE = 100
 export async function Order(req: Request, res: Response): Promise<void> {
   const parsedBody = orderSchema.safeParse(req.body)
@@ -51,35 +49,34 @@ export async function Order(req: Request, res: Response): Promise<void> {
     return
   }
 
-  // margin_required = collateral the user must have to back this position
   const margin_required = Math.round((price * qty) / leverage)
   const cltrl = await prisma.collateral.findFirst({ where: { userId } })
 
-  if (!cltrl || cltrl.available < margin_required) {
+  if (!cltrl || cltrl.available < BigInt(margin_required)) {
     res.status(400).json({ error: "Insufficient collateral" })
     return
   }
 
   await prisma.collateral.update({
-    where: { collateralId: cltrl.collateralId },
+    where: { id: cltrl.id },
     data: {
-      available: { decrement: margin_required },
-      locked:    { increment: margin_required }
+      available: { decrement: BigInt(margin_required) },
+      locked:    { increment: BigInt(margin_required) }
     }
   })
 
-  const order = await prisma.orders.create({
-    data: { market, type, leverage, orderType, price, qty,
+  const order = await prisma.order.create({
+    data: { market, type, leverage, orderType, price: BigInt(price), qty: BigInt(qty),
       status: orderType === "MARKET" ? "FILLED" : "OPEN",
       userId
     }
   })
 
   if (orderType === "LIMIT") {
-    await redis.xadd("orders", "*",
+    await (redis as any).xadd("orders", "*",
       "action",    "NEW_ORDER",
       "market",    market,
-      "orderId",   String(order.orderId),
+      "orderId",   String(order.id),
       "userId",    String(userId),
       "type",      type,
       "orderType", orderType,
@@ -91,14 +88,22 @@ export async function Order(req: Request, res: Response): Promise<void> {
   }
 
   if (orderType === "MARKET") {
+    const raw_mark = await (redis as any).hget("mark_prices", market)
+    if (!raw_mark) {
+      res.status(400).json({ error: "Market price unavailable" })
+      return
+    }
+    const fill_price = Number(raw_mark)
+
     const liquidationPrice = type === "LONG"
-      ? price * (1 - 1 / leverage)
-      : price * (1 + 1 / leverage)
+      ? fill_price * (1 - 1 / leverage)
+      : fill_price * (1 + 1 / leverage)
 
     const position = await prisma.position.create({
-      data: { market, type, qty, leverage, margin: margin_required, averagePrice: price,
-        liquidationPrice: Math.round(liquidationPrice),
-        pnl: 0, userId
+      data: { market, type, qty: BigInt(qty), leverage, margin: BigInt(margin_required),
+        averagePrice: BigInt(fill_price),
+        liquidationPrice: BigInt(Math.round(liquidationPrice)),
+        pnl: BigInt(0), userId
       }
     })
 
@@ -119,12 +124,11 @@ export async function Order(req: Request, res: Response): Promise<void> {
   res.status(201).json({ order })
 }
 
-/**set status to cancelled,unlock margin,remove from redis sorted set */
 export async function cancelOrder(req: Request, res: Response): Promise<void> {
   const userId = req.userId
 
-  const order = await prisma.orders.findFirst({
-    where: { orderId: Number(req.params.orderId), userId }
+  const order = await prisma.order.findFirst({
+    where: { id: Number(req.params.orderId), userId }
   })
 
   if (!order) {
@@ -137,31 +141,28 @@ export async function cancelOrder(req: Request, res: Response): Promise<void> {
     return
   }
 
-  const cancelled = await prisma.orders.update({
-    where: { orderId: order.orderId },
+  const cancelled = await prisma.order.update({
+    where: { id: order.id },
     data: { status: "CANCELLED" }
   })
 
-  // derive margin to unlock from qty stored on the order
-  const margin_to_unlock = Math.round((order.price * order.qty) / order.leverage)
+  const margin_to_unlock = Math.round((Number(order.price) * Number(order.qty)) / order.leverage)
   await prisma.collateral.updateMany({
     where: { userId },
     data: {
-      available: { increment: margin_to_unlock },
-      locked:    { decrement: margin_to_unlock }
+      available: { increment: BigInt(margin_to_unlock) },
+      locked:    { decrement: BigInt(margin_to_unlock) }
     }
   })
 
-  // remove from Redis sorted set so orderbook snapshot stays clean
   const key = order.type === "LONG" ? `${order.market}:bids` : `${order.market}:asks`
-  await redis.zrem(key, String(order.orderId))
+  await redis.zrem(key, String(order.id))
 
-  // notify engine to remove from in-memory orderbook
   await (redis as any).xadd(
     "orders", "*",
     "action",  "CANCEL_ORDER",
     "market",  order.market,
-    "orderId", String(order.orderId),
+    "orderId", String(order.id),
     "type",    order.type,
     "price",   String(order.price)
   )
@@ -169,8 +170,7 @@ export async function cancelOrder(req: Request, res: Response): Promise<void> {
   res.status(200).json({ order: cancelled })
 }
 
-/**return avl,lckd,total,cltrl table readonly */
-export async function equityAvl(req: Request, res: Response): Promise<void> {
+export async function getCollateral(req: Request, res: Response): Promise<void> {
   const userId = req.userId
 
   const cltrl = await prisma.collateral.findFirst({ where: { userId } })
@@ -180,20 +180,18 @@ export async function equityAvl(req: Request, res: Response): Promise<void> {
   }
 
   res.status(200).json({
-    available: cltrl.available,
-    locked: cltrl.locked,
-    total: cltrl.available + cltrl.locked
+    available: Number(cltrl.available),
+    locked:    Number(cltrl.locked),
+    total:     Number(cltrl.available + cltrl.locked)
   })
 }
 
-// positions helper
 async function getPositions(userId: number | undefined, marketId: string, status: "OPEN" | "CLOSED") {
   return await prisma.position.findMany({
     where: { userId, market: marketId, status }
   })
 }
 
-/** Need to review once more */
 export async function openPosition(req: Request, res: Response): Promise<void> {
   const userId = req.userId
   const marketId = req.params.marketId as string
@@ -207,7 +205,6 @@ export async function openPosition(req: Request, res: Response): Promise<void> {
 
   res.status(200).json({ positions })
 }
-
 
 export async function closedPosition(req: Request, res: Response): Promise<void> {
   const userId = req.userId
@@ -223,56 +220,56 @@ export async function closedPosition(req: Request, res: Response): Promise<void>
   res.status(200).json({ positions })
 }
 
-export async function closePosition(req:Request,res:Response):Promise<void>{
-  const userId =req.userId;
-  const positionId= Number(req.params.positionId)
+export async function closePosition(req: Request, res: Response): Promise<void> {
+  const userId = req.userId
+  const positionId = Number(req.params.positionId)
 
   const position = await prisma.position.findFirst({
-    where:{id:positionId,userId}
+    where: { id: positionId, userId }
   })
 
-  if(!position){
-    res.status(404).json({error:"position not found"})
+  if (!position) {
+    res.status(404).json({ error: "Position not found" })
     return
   }
-  if(position.status !== "OPEN"){
-    res.status(400).json({error:"postion is not open"})
+  if (position.status !== "OPEN") {
+    res.status(400).json({ error: "Position is not open" })
     return
   }
 
   const raw_mark = await (redis as any).hget("mark_prices", position.market)
-  const mark_price = raw_mark ? Number(raw_mark) : position.averagePrice
+  const mark_price = raw_mark ? Number(raw_mark) : Number(position.averagePrice)
+
   const pnl = position.type === "LONG"
-    ? (mark_price - position.averagePrice) * position.qty
-    : (position.averagePrice - mark_price) * position.qty
-  const collateral_return = Math.max(0, position.margin + pnl)
+    ? (mark_price - Number(position.averagePrice)) * Number(position.qty) //bind the logic somewhere else
+    : (Number(position.averagePrice) - mark_price) * Number(position.qty)
+
+  const collateral_return = Math.max(0, Number(position.margin) + pnl)
 
   await prisma.$transaction([
     prisma.position.update({
-      where:{id:positionId},
-      data:{status:"CLOSED", pnl}
+      where: { id: positionId },
+      data: { status: "CLOSED", pnl: BigInt(Math.round(pnl)) }
     }),
     prisma.collateral.updateMany({
-      where:{userId},
-      data:{
-        available:{increment:collateral_return},
-        locked:{decrement:position.margin}
+      where: { userId },
+      data: {
+        available: { increment: BigInt(collateral_return) },
+        locked:    { decrement: position.margin }
       }
     })
   ])
 
   await (redis as any).xadd(
-    "positions","*",
-    "action","CLOSE",
-    "positionId",String(positionId)
+    "positions", "*",
+    "action",     "CLOSE",
+    "positionId", String(positionId)
   )
-  res.status(200).json({message:"position closed", pnl})
+  res.status(200).json({ message: "position closed", pnl })
 }
 
-
-// orders helper
 async function getOrders(userId: number | undefined, marketId: string, status?: string) {
-  return await prisma.orders.findMany({
+  return await prisma.order.findMany({
     where: { userId, market: marketId, ...(status && { status }) }
   })
 }
@@ -282,12 +279,10 @@ export async function getOrder(req: Request, res: Response): Promise<void> {
   const marketId = req.params.marketId as string
 
   const orders = await getOrders(userId, marketId)
-
   if (!orders.length) {
     res.status(404).json({ error: "No orders found" })
     return
   }
-
   res.status(200).json({ orders })
 }
 
@@ -296,12 +291,10 @@ export async function openOrder(req: Request, res: Response): Promise<void> {
   const marketId = req.params.marketId as string
 
   const orders = await getOrders(userId, marketId, "OPEN")
-
   if (!orders.length) {
     res.status(404).json({ error: "No open orders found" })
     return
   }
-
   res.status(200).json({ orders })
 }
 
@@ -309,21 +302,16 @@ export async function closedOrder(req: Request, res: Response): Promise<void> {
   const userId = req.userId
   const marketId = req.params.marketId as string
 
-  const orders = await getOrders(userId, marketId, "CLOSED")
-
+  const orders = await getOrders(userId, marketId, "CANCELLED")
   if (!orders.length) {
     res.status(404).json({ error: "No closed orders found" })
     return
   }
-
   res.status(200).json({ orders })
 }
 
-// fills
 export async function getFills(req: Request, res: Response): Promise<void> {
   const userId = req.userId
-
-  const fills = await prisma.fills.findMany({ where: { userId } })
-
+  const fills = await prisma.fill.findMany({ where: { userId } })
   res.status(200).json({ fills })
 }
