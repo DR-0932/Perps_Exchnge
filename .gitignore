@@ -37,6 +37,7 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 **/generated/prisma
 **/generated
 
-#claude
+# AI editor config — local only, not for version control
+CLAUDE.md
 .claude
 .cursor
